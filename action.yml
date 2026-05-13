@@ -1,0 +1,320 @@
+name: 'Safari WebExtension Publish'
+description: 'Sign and publish Safari web extensions (macOS + iOS) to App Store Connect'
+
+inputs:
+  project-path:
+    description: 'Path to the Xcode project directory (e.g. .output/My Extension)'
+    required: true
+  bundle-identifier:
+    description: 'Bundle identifier (e.g. com.example.my-extension)'
+    required: true
+  team-id:
+    description: 'Apple Developer Team ID'
+    required: true
+  app-signing-identity:
+    description: 'Code signing identity (e.g. "3rd Party Mac Developer Application: Name (TeamID)")'
+    required: true
+  installer-signing-identity:
+    description: 'Installer signing identity (e.g. "3rd Party Mac Developer Installer: Name (TeamID)")'
+    required: true
+  macos-deployment-target:
+    description: 'Minimum macOS deployment target'
+    required: false
+    default: '12.0'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Check macOS version
+      shell: bash
+      run: |
+        MACOS_VERSION=$(sw_vers -productVersion)
+        MAJOR=$(echo "$MACOS_VERSION" | cut -d. -f1)
+        if [ "$MAJOR" -lt 26 ]; then
+          echo "::error::macOS 26+ is required for Xcode 26 SDK (current: $MACOS_VERSION). Use runs-on: macos-26"
+          exit 1
+        fi
+        echo "macOS $MACOS_VERSION — OK"
+
+    - name: Detect project and platforms
+      shell: bash
+      run: |
+        XCODEPROJ=$(find "${{ inputs.project-path }}" -maxdepth 1 -name "*.xcodeproj" | head -1)
+        if [ -z "$XCODEPROJ" ]; then
+          echo "::error::No .xcodeproj found in ${{ inputs.project-path }}"
+          exit 1
+        fi
+        PROJECT_NAME=$(basename "$XCODEPROJ" .xcodeproj)
+        echo "SAFARI_WEBEXT_PROJECT_NAME=$PROJECT_NAME" >> "$GITHUB_ENV"
+
+        SCHEMES=$(xcodebuild -project "$XCODEPROJ" -list -json 2>/dev/null \
+          | python3 -c "import sys,json; print('\n'.join(json.load(sys.stdin)['project']['schemes']))")
+
+        HAS_MACOS=false
+        HAS_IOS=false
+        if echo "$SCHEMES" | grep -q "(macOS)"; then
+          HAS_MACOS=true
+        fi
+        if echo "$SCHEMES" | grep -q "(iOS)"; then
+          HAS_IOS=true
+        fi
+
+        if [ "$HAS_MACOS" = false ] && [ "$HAS_IOS" = false ]; then
+          echo "::error::No macOS or iOS scheme found in project. Available schemes: $(echo "$SCHEMES" | tr '\n' ', ')"
+          exit 1
+        fi
+
+        echo "SAFARI_WEBEXT_HAS_MACOS=$HAS_MACOS" >> "$GITHUB_ENV"
+        echo "SAFARI_WEBEXT_HAS_IOS=$HAS_IOS" >> "$GITHUB_ENV"
+        echo "Detected platforms: macOS=$HAS_MACOS, iOS=$HAS_IOS"
+
+    - name: Validate environment variables
+      shell: bash
+      run: |
+        MISSING=""
+        for var in APPLE_CERTIFICATE_BASE64 APPLE_CERTIFICATE_PASSWORD \
+                   APPLE_API_KEY APPLE_API_KEY_ID APPLE_API_ISSUER; do
+          if [ -z "${!var}" ]; then
+            MISSING="$MISSING $var"
+          fi
+        done
+
+        if [ "$SAFARI_WEBEXT_HAS_MACOS" = true ]; then
+          for var in APPLE_MACOS_PROVISIONING_PROFILE_BASE64 APPLE_MACOS_EXTENSION_PROVISIONING_PROFILE_BASE64; do
+            if [ -z "${!var}" ]; then
+              MISSING="$MISSING $var"
+            fi
+          done
+        fi
+
+        if [ "$SAFARI_WEBEXT_HAS_IOS" = true ]; then
+          for var in APPLE_IOS_PROVISIONING_PROFILE_BASE64 APPLE_IOS_EXTENSION_PROVISIONING_PROFILE_BASE64; do
+            if [ -z "${!var}" ]; then
+              MISSING="$MISSING $var"
+            fi
+          done
+        fi
+
+        if [ -n "$MISSING" ]; then
+          echo "::error::Missing required environment variables:$MISSING"
+          exit 1
+        fi
+
+    - name: Setup certificates
+      shell: bash
+      run: |
+        KEYCHAIN_PATH="$RUNNER_TEMP/safari-webext-signing.keychain-db"
+        security create-keychain -p actions "$KEYCHAIN_PATH"
+        security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+        security unlock-keychain -p actions "$KEYCHAIN_PATH"
+        security default-keychain -s "$KEYCHAIN_PATH"
+
+        echo "$APPLE_CERTIFICATE_BASE64" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+        security import "$RUNNER_TEMP/cert.p12" \
+          -P "$APPLE_CERTIFICATE_PASSWORD" \
+          -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+        rm "$RUNNER_TEMP/cert.p12"
+
+        security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k actions "$KEYCHAIN_PATH"
+
+        mkdir -p ~/private_keys
+        echo "$APPLE_API_KEY" | base64 --decode \
+          > ~/private_keys/AuthKey_${APPLE_API_KEY_ID}.p8
+
+        echo "SAFARI_WEBEXT_KEYCHAIN=$KEYCHAIN_PATH" >> "$GITHUB_ENV"
+
+    - name: Install macOS provisioning profiles
+      if: env.SAFARI_WEBEXT_HAS_MACOS == 'true'
+      shell: bash
+      run: |
+        mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
+
+        install_profile() {
+          local secret_b64="$1" local_name="$2" env_var="$3" ext="$4"
+          echo "$secret_b64" | base64 --decode > "/tmp/$local_name"
+          local uuid
+          uuid=$(/usr/libexec/PlistBuddy -c "Print UUID" /dev/stdin \
+            <<< "$(security cms -D -i "/tmp/$local_name")")
+          mv "/tmp/$local_name" ~/Library/MobileDevice/Provisioning\ Profiles/"$uuid.$ext"
+          echo "$env_var=$uuid" >> "$GITHUB_ENV"
+        }
+
+        install_profile "$APPLE_MACOS_PROVISIONING_PROFILE_BASE64" app.provisionprofile SAFARI_WEBEXT_APP_PROFILE provisionprofile
+        install_profile "$APPLE_MACOS_EXTENSION_PROVISIONING_PROFILE_BASE64" ext.provisionprofile SAFARI_WEBEXT_EXT_PROFILE provisionprofile
+
+    - name: Install iOS provisioning profiles
+      if: env.SAFARI_WEBEXT_HAS_IOS == 'true'
+      shell: bash
+      run: |
+        mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
+
+        install_profile() {
+          local secret_b64="$1" local_name="$2" env_var="$3" ext="$4"
+          echo "$secret_b64" | base64 --decode > "/tmp/$local_name"
+          local uuid
+          uuid=$(/usr/libexec/PlistBuddy -c "Print UUID" /dev/stdin \
+            <<< "$(security cms -D -i "/tmp/$local_name")")
+          mv "/tmp/$local_name" ~/Library/MobileDevice/Provisioning\ Profiles/"$uuid.$ext"
+          echo "$env_var=$uuid" >> "$GITHUB_ENV"
+        }
+
+        install_profile "$APPLE_IOS_PROVISIONING_PROFILE_BASE64" ios_app.mobileprovision SAFARI_WEBEXT_IOS_APP_PROFILE mobileprovision
+        install_profile "$APPLE_IOS_EXTENSION_PROVISIONING_PROFILE_BASE64" ios_ext.mobileprovision SAFARI_WEBEXT_IOS_EXT_PROFILE mobileprovision
+
+    - name: Create entitlements
+      shell: bash
+      run: |
+        cat > "$RUNNER_TEMP/app.entitlements" << EOF
+        <?xml version="1.0" encoding="UTF-8"?>
+        <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+        <plist version="1.0">
+        <dict>
+            <key>com.apple.application-identifier</key>
+            <string>${{ inputs.team-id }}.${{ inputs.bundle-identifier }}</string>
+            <key>com.apple.developer.team-identifier</key>
+            <string>${{ inputs.team-id }}</string>
+            <key>com.apple.security.app-sandbox</key>
+            <true/>
+            <key>com.apple.security.network.client</key>
+            <true/>
+        </dict>
+        </plist>
+        EOF
+
+        cat > "$RUNNER_TEMP/ext.entitlements" << EOF
+        <?xml version="1.0" encoding="UTF-8"?>
+        <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+        <plist version="1.0">
+        <dict>
+            <key>com.apple.application-identifier</key>
+            <string>${{ inputs.team-id }}.${{ inputs.bundle-identifier }}.Extension</string>
+            <key>com.apple.developer.team-identifier</key>
+            <string>${{ inputs.team-id }}</string>
+            <key>com.apple.security.app-sandbox</key>
+            <true/>
+            <key>com.apple.security.network.client</key>
+            <true/>
+        </dict>
+        </plist>
+        EOF
+
+    - name: Build and archive macOS
+      if: env.SAFARI_WEBEXT_HAS_MACOS == 'true'
+      shell: bash
+      run: |
+        cd "${{ inputs.project-path }}"
+        xcodebuild -project "$SAFARI_WEBEXT_PROJECT_NAME.xcodeproj" \
+          -scheme "$SAFARI_WEBEXT_PROJECT_NAME (macOS)" \
+          -configuration Release \
+          -archivePath "$RUNNER_TEMP/macOS.xcarchive" \
+          archive \
+          CODE_SIGN_IDENTITY="" \
+          CODE_SIGNING_REQUIRED=NO \
+          CODE_SIGNING_ALLOWED=NO \
+          MACOSX_DEPLOYMENT_TARGET=${{ inputs.macos-deployment-target }} \
+          ARCHS="x86_64 arm64" \
+          ONLY_ACTIVE_ARCH=NO
+
+    - name: Sign and package macOS
+      if: env.SAFARI_WEBEXT_HAS_MACOS == 'true'
+      shell: bash
+      run: |
+        APP_PATH="$RUNNER_TEMP/macOS.xcarchive/Products/Applications/$SAFARI_WEBEXT_PROJECT_NAME.app"
+
+        cp ~/Library/MobileDevice/Provisioning\ Profiles/"$SAFARI_WEBEXT_APP_PROFILE.provisionprofile" \
+          "$APP_PATH/Contents/embedded.provisionprofile"
+
+        EXT_APP=$(find "$APP_PATH" -path "*/PlugIns/*.appex" -maxdepth 3 | head -1)
+        if [ -n "$EXT_APP" ]; then
+          cp ~/Library/MobileDevice/Provisioning\ Profiles/"$SAFARI_WEBEXT_EXT_PROFILE.provisionprofile" \
+            "$EXT_APP/Contents/embedded.provisionprofile"
+          codesign --force --options runtime --timestamp \
+            --entitlements "$RUNNER_TEMP/ext.entitlements" \
+            --sign "${{ inputs.app-signing-identity }}" "$EXT_APP"
+        fi
+
+        codesign --force --options runtime --timestamp \
+          --entitlements "$RUNNER_TEMP/app.entitlements" \
+          --sign "${{ inputs.app-signing-identity }}" "$APP_PATH"
+        codesign --verify --deep --strict "$APP_PATH"
+
+        productbuild --component "$APP_PATH" /Applications \
+          --sign "${{ inputs.installer-signing-identity }}" \
+          --identifier "${{ inputs.bundle-identifier }}" \
+          "$RUNNER_TEMP/macOS.pkg"
+
+    - name: Upload macOS to App Store Connect
+      if: env.SAFARI_WEBEXT_HAS_MACOS == 'true'
+      shell: bash
+      run: |
+        xcrun altool --upload-app \
+          --type osx \
+          --file "$RUNNER_TEMP/macOS.pkg" \
+          --apiKey "$APPLE_API_KEY_ID" \
+          --apiIssuer "$APPLE_API_ISSUER"
+
+    - name: Build iOS archive
+      if: env.SAFARI_WEBEXT_HAS_IOS == 'true'
+      shell: bash
+      run: |
+        cd "${{ inputs.project-path }}"
+        xcodebuild -project "$SAFARI_WEBEXT_PROJECT_NAME.xcodeproj" \
+          -scheme "$SAFARI_WEBEXT_PROJECT_NAME (iOS)" \
+          -configuration Release \
+          -archivePath "$RUNNER_TEMP/iOS.xcarchive" \
+          -sdk iphoneos \
+          archive \
+          CODE_SIGN_IDENTITY="" \
+          CODE_SIGNING_REQUIRED=NO \
+          CODE_SIGNING_ALLOWED=NO
+
+    - name: Export iOS IPA
+      if: env.SAFARI_WEBEXT_HAS_IOS == 'true'
+      shell: bash
+      run: |
+        cat > "$RUNNER_TEMP/ExportOptions-iOS.plist" << EOF
+        <?xml version="1.0" encoding="UTF-8"?>
+        <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+        <plist version="1.0">
+        <dict>
+            <key>method</key>
+            <string>app-store-connect</string>
+            <key>teamID</key>
+            <string>${{ inputs.team-id }}</string>
+            <key>signingStyle</key>
+            <string>manual</string>
+            <key>provisioningProfiles</key>
+            <dict>
+                <key>${{ inputs.bundle-identifier }}</key>
+                <string>${SAFARI_WEBEXT_IOS_APP_PROFILE}</string>
+                <key>${{ inputs.bundle-identifier }}.Extension</key>
+                <string>${SAFARI_WEBEXT_IOS_EXT_PROFILE}</string>
+            </dict>
+            <key>signingCertificate</key>
+            <string>Apple Distribution</string>
+        </dict>
+        </plist>
+        EOF
+
+        xcodebuild -exportArchive \
+          -archivePath "$RUNNER_TEMP/iOS.xcarchive" \
+          -exportOptionsPlist "$RUNNER_TEMP/ExportOptions-iOS.plist" \
+          -exportPath "$RUNNER_TEMP/ios-export"
+
+    - name: Upload iOS to App Store Connect
+      if: env.SAFARI_WEBEXT_HAS_IOS == 'true'
+      shell: bash
+      run: |
+        IPA_PATH=$(find "$RUNNER_TEMP/ios-export" -name "*.ipa" | head -1)
+        xcrun altool --upload-app \
+          --type ios \
+          --file "$IPA_PATH" \
+          --apiKey "$APPLE_API_KEY_ID" \
+          --apiIssuer "$APPLE_API_ISSUER"
+
+    - name: Cleanup
+      if: always()
+      shell: bash
+      run: |
+        security delete-keychain "$SAFARI_WEBEXT_KEYCHAIN" 2>/dev/null || true
+        rm -rf ~/private_keys ~/Library/MobileDevice/Provisioning\ Profiles 2>/dev/null || true
