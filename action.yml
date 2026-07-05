@@ -415,7 +415,7 @@ runs:
           RESPONSE=$(cat "$TMPFILE")
           rm -f "$TMPFILE"
           if [ "$HTTP_CODE" -ge 400 ]; then
-            echo "::error::API $METHOD $URL returned HTTP $HTTP_CODE: $RESPONSE"
+            echo "::error::API $METHOD $URL returned HTTP $HTTP_CODE: $RESPONSE" >&2
             return 1
           fi
           echo "$RESPONSE"
