@@ -588,33 +588,54 @@ runs:
           }' > /dev/null
           echo "Build attached."
 
-          # Submit for review (using reviewSubmissions API)
-          echo "Submitting for review..."
-          local SUBMIT_RESPONSE
-          SUBMIT_RESPONSE=$(api_post "$API/reviewSubmissions" '{
-            "data": {
-              "type": "reviewSubmissions",
-              "relationships": {
-                "app": {
-                  "data": {
-                    "type": "apps",
-                    "id": "'"$APP_ID"'"
-                  }
+        }
+
+        # Prepare both platforms
+        submit_platform "MAC_OS" "macOS"
+        submit_platform "IOS" "iOS"
+
+        # Submit all pending versions for review (one submission per app)
+        echo ""
+        echo "━━━ Submitting for review ━━━"
+
+        JWT=$(generate_jwt)
+        AUTH="Authorization: Bearer $JWT"
+
+        SUBMIT_RESPONSE=$(api_post "$API/reviewSubmissions" '{
+          "data": {
+            "type": "reviewSubmissions",
+            "relationships": {
+              "app": {
+                "data": {
+                  "type": "apps",
+                  "id": "'"$APP_ID"'"
                 }
               }
             }
-          }' 2>&1) || true
+          }
+        }' 2>&1) || true
 
-          if echo "$SUBMIT_RESPONSE" | python3 -c "import sys,json; json.load(sys.stdin)['data']" &>/dev/null; then
-            echo "✅ $PLATFORM_DISPLAY v${{ inputs.version }} submitted for review!"
-          else
-            echo "::warning::Failed to submit $PLATFORM_DISPLAY for review. Response: $SUBMIT_RESPONSE"
-          fi
-        }
+        SUBMISSION_ID=$(echo "$SUBMIT_RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin)['data']['id'])" 2>/dev/null || true)
+        if [ -z "$SUBMISSION_ID" ]; then
+          echo "::warning::Failed to create review submission. Response: $SUBMIT_RESPONSE"
+          exit 0
+        fi
 
-        # Submit for both platforms
-        submit_platform "MAC_OS" "macOS"
-        submit_platform "IOS" "iOS"
+        CONFIRM_RESPONSE=$(api_patch "$API/reviewSubmissions/$SUBMISSION_ID" '{
+          "data": {
+            "type": "reviewSubmissions",
+            "id": "'"$SUBMISSION_ID"'",
+            "attributes": {
+              "submitted": true
+            }
+          }
+        }' 2>&1) || true
+
+        if echo "$CONFIRM_RESPONSE" | python3 -c "import sys,json; json.load(sys.stdin)['data']" &>/dev/null; then
+          echo "✅ v${{ inputs.version }} submitted for review!"
+        else
+          echo "::warning::Failed to confirm review submission. Response: $CONFIRM_RESPONSE"
+        fi
 
         echo ""
         echo "Done."
