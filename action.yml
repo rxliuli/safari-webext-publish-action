@@ -28,6 +28,10 @@ inputs:
   version:
     description: 'App version string to submit (required for submit mode, e.g. "1.2.3")'
     required: false
+  release-notes:
+    description: 'What''s New text for App Store (submit mode). Defaults to "Bug fixes and improvements."'
+    required: false
+    default: 'Bug fixes and improvements.'
 
 runs:
   using: 'composite'
@@ -589,6 +593,25 @@ runs:
             }
           }' > /dev/null
           echo "Build attached."
+
+          # Set release notes (whatsNew)
+          local LOC_RESPONSE LOC_ID
+          LOC_RESPONSE=$(api_get "$API/appStoreVersions/$VERSION_ID/appStoreVersionLocalizations")
+          LOC_ID=$(echo "$LOC_RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin)['data'][0]['id'])" 2>/dev/null || true)
+          if [ -n "$LOC_ID" ]; then
+            local ESCAPED_NOTES
+            ESCAPED_NOTES=$(python3 -c "import json; print(json.dumps('${{ inputs.release-notes }}'))")
+            api_patch "$API/appStoreVersionLocalizations/$LOC_ID" '{
+              "data": {
+                "type": "appStoreVersionLocalizations",
+                "id": "'"$LOC_ID"'",
+                "attributes": {
+                  "whatsNew": '"$ESCAPED_NOTES"'
+                }
+              }
+            }' > /dev/null
+            echo "Release notes updated."
+          fi
 
           VERSION_IDS+=("$VERSION_ID")
         }
