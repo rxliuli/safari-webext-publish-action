@@ -457,25 +457,6 @@ runs:
         fi
         echo "Found app ID: $APP_ID"
 
-        # ── Clean up stale draft review submissions ──
-        STALE_IDS=$(api_get "$API/apps/$APP_ID/reviewSubmissions" | python3 -c "
-        import sys,json
-        d=json.load(sys.stdin)
-        for s in d.get('data',[]):
-            state=s['attributes']['state']
-            if state in ('WAITING_FOR_REVIEW','IN_REVIEW','COMPLETING'):
-                continue
-            print(s['id'])
-        " 2>/dev/null || true)
-
-        if [ -n "$STALE_IDS" ]; then
-          echo "Cleaning up stale review submissions..."
-          for SID in $STALE_IDS; do
-            api_delete "$API/reviewSubmissions/$SID"
-          done
-          echo "Cleaned up $(echo "$STALE_IDS" | wc -l | tr -d ' ') stale submissions."
-        fi
-
         # ── Process each platform ──
         VERSION_IDS=()
 
@@ -650,32 +631,61 @@ runs:
             echo "Release notes updated."
           fi
 
-          # Submit for review
+          # Submit for review: reuse existing draft or create new submission
           echo "Submitting $PLATFORM_DISPLAY for review..."
           JWT=$(generate_jwt)
           AUTH="Authorization: Bearer $JWT"
 
-          local SUBMIT_RESPONSE SUBMISSION_ID
-          SUBMIT_RESPONSE=$(api_post "$API/reviewSubmissions" '{
-            "data": {
-              "type": "reviewSubmissions",
-              "relationships": {
-                "app": {
-                  "data": {
-                    "type": "apps",
-                    "id": "'"$APP_ID"'"
+          local SUBMISSION_ID
+          # Find a reusable draft submission
+          SUBMISSION_ID=$(api_get "$API/apps/$APP_ID/reviewSubmissions" | python3 -c "
+        import sys,json
+        d=json.load(sys.stdin)
+        skip = {'WAITING_FOR_REVIEW','IN_REVIEW','COMPLETING'}
+        for s in d.get('data',[]):
+            if s['attributes']['state'] not in skip:
+                print(s['id'])
+                sys.exit()
+        " 2>/dev/null || true)
+
+          if [ -n "$SUBMISSION_ID" ]; then
+            echo "Reusing existing review submission: $SUBMISSION_ID"
+            # Remove existing items from this submission
+            local ITEMS_RESPONSE
+            ITEMS_RESPONSE=$(api_get "$API/reviewSubmissions/$SUBMISSION_ID/items" 2>/dev/null || true)
+            local OLD_ITEMS
+            OLD_ITEMS=$(echo "$ITEMS_RESPONSE" | python3 -c "
+        import sys,json
+        d=json.load(sys.stdin)
+        for i in d.get('data',[]): print(i['id'])
+        " 2>/dev/null || true)
+            for OID in $OLD_ITEMS; do
+              api_delete "$API/reviewSubmissionItems/$OID"
+            done
+          else
+            echo "Creating new review submission..."
+            local SUBMIT_RESPONSE
+            SUBMIT_RESPONSE=$(api_post "$API/reviewSubmissions" '{
+              "data": {
+                "type": "reviewSubmissions",
+                "relationships": {
+                  "app": {
+                    "data": {
+                      "type": "apps",
+                      "id": "'"$APP_ID"'"
+                    }
                   }
                 }
               }
-            }
-          }' 2>&1) || true
-
-          SUBMISSION_ID=$(echo "$SUBMIT_RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin)['data']['id'])" 2>/dev/null || true)
-          if [ -z "$SUBMISSION_ID" ]; then
-            echo "::warning::Failed to create review submission for $PLATFORM_DISPLAY. Response: $SUBMIT_RESPONSE"
-            return 0
+            }' 2>&1) || true
+            SUBMISSION_ID=$(echo "$SUBMIT_RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin)['data']['id'])" 2>/dev/null || true)
+            if [ -z "$SUBMISSION_ID" ]; then
+              echo "::warning::Failed to create review submission for $PLATFORM_DISPLAY. Response: $SUBMIT_RESPONSE"
+              return 0
+            fi
           fi
 
+          # Add version as item
           api_post "$API/reviewSubmissionItems" '{
             "data": {
               "type": "reviewSubmissionItems",
@@ -696,6 +706,7 @@ runs:
             }
           }' > /dev/null
 
+          # Confirm submission
           local CONFIRM_RESPONSE
           CONFIRM_RESPONSE=$(api_patch "$API/reviewSubmissions/$SUBMISSION_ID" '{
             "data": {
