@@ -2,30 +2,40 @@ name: 'Safari WebExtension Publish'
 description: 'Sign and publish Safari web extensions (macOS + iOS) to App Store Connect'
 
 inputs:
+  mode:
+    description: 'Operation mode: "build" (build+upload on macOS) or "submit" (create version + submit for review via API, works on Linux)'
+    required: false
+    default: 'build'
   project-path:
-    description: 'Path to the Xcode project directory (e.g. .output/My Extension)'
-    required: true
+    description: 'Path to the Xcode project directory (required for build mode)'
+    required: false
   bundle-identifier:
     description: 'Bundle identifier (e.g. com.example.my-extension)'
     required: true
   team-id:
-    description: 'Apple Developer Team ID'
-    required: true
+    description: 'Apple Developer Team ID (required for build mode)'
+    required: false
   app-signing-identity:
-    description: 'Code signing identity (e.g. "3rd Party Mac Developer Application: Name (TeamID)")'
-    required: true
+    description: 'Code signing identity (required for build mode)'
+    required: false
   installer-signing-identity:
-    description: 'Installer signing identity (e.g. "3rd Party Mac Developer Installer: Name (TeamID)")'
-    required: true
+    description: 'Installer signing identity (required for build mode)'
+    required: false
   macos-deployment-target:
     description: 'Minimum macOS deployment target'
     required: false
     default: '12.0'
+  version:
+    description: 'App version string to submit (required for submit mode, e.g. "1.2.3")'
+    required: false
 
 runs:
   using: 'composite'
   steps:
+    # ── BUILD MODE ──────────────────────────────────────────────
+
     - name: Check macOS version
+      if: inputs.mode == 'build'
       shell: bash
       run: |
         MACOS_VERSION=$(sw_vers -productVersion)
@@ -37,6 +47,7 @@ runs:
         echo "macOS $MACOS_VERSION — OK"
 
     - name: Detect project and platforms
+      if: inputs.mode == 'build'
       shell: bash
       run: |
         XCODEPROJ=$(find "${{ inputs.project-path }}" -maxdepth 1 -name "*.xcodeproj" | head -1)
@@ -82,7 +93,8 @@ runs:
         echo "SAFARI_WEBEXT_IOS_SCHEME=$IOS_SCHEME" >> "$GITHUB_ENV"
         echo "Detected platforms: macOS=$HAS_MACOS, iOS=$HAS_IOS"
 
-    - name: Validate environment variables
+    - name: Validate environment variables (build)
+      if: inputs.mode == 'build'
       shell: bash
       run: |
         MISSING=""
@@ -115,6 +127,7 @@ runs:
         fi
 
     - name: Setup certificates
+      if: inputs.mode == 'build'
       shell: bash
       run: |
         KEYCHAIN_PATH="$RUNNER_TEMP/safari-webext-signing.keychain-db"
@@ -138,7 +151,7 @@ runs:
         echo "SAFARI_WEBEXT_KEYCHAIN=$KEYCHAIN_PATH" >> "$GITHUB_ENV"
 
     - name: Install macOS provisioning profiles
-      if: env.SAFARI_WEBEXT_HAS_MACOS == 'true'
+      if: inputs.mode == 'build' && env.SAFARI_WEBEXT_HAS_MACOS == 'true'
       shell: bash
       run: |
         mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
@@ -157,7 +170,7 @@ runs:
         install_profile "$APPLE_MACOS_EXTENSION_PROVISIONING_PROFILE_BASE64" ext.provisionprofile SAFARI_WEBEXT_EXT_PROFILE provisionprofile
 
     - name: Install iOS provisioning profiles
-      if: env.SAFARI_WEBEXT_HAS_IOS == 'true'
+      if: inputs.mode == 'build' && env.SAFARI_WEBEXT_HAS_IOS == 'true'
       shell: bash
       run: |
         mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
@@ -176,6 +189,7 @@ runs:
         install_profile "$APPLE_IOS_EXTENSION_PROVISIONING_PROFILE_BASE64" ios_ext.mobileprovision SAFARI_WEBEXT_IOS_EXT_PROFILE mobileprovision
 
     - name: Create entitlements
+      if: inputs.mode == 'build'
       shell: bash
       run: |
         cat > "$RUNNER_TEMP/app.entitlements" << EOF
@@ -213,7 +227,7 @@ runs:
         EOF
 
     - name: Build and archive macOS
-      if: env.SAFARI_WEBEXT_HAS_MACOS == 'true'
+      if: inputs.mode == 'build' && env.SAFARI_WEBEXT_HAS_MACOS == 'true'
       shell: bash
       run: |
         cd "${{ inputs.project-path }}"
@@ -230,7 +244,7 @@ runs:
           ONLY_ACTIVE_ARCH=NO
 
     - name: Sign and package macOS
-      if: env.SAFARI_WEBEXT_HAS_MACOS == 'true'
+      if: inputs.mode == 'build' && env.SAFARI_WEBEXT_HAS_MACOS == 'true'
       shell: bash
       run: |
         APP_PATH="$RUNNER_TEMP/macOS.xcarchive/Products/Applications/$SAFARI_WEBEXT_PROJECT_NAME.app"
@@ -258,7 +272,7 @@ runs:
           "$RUNNER_TEMP/macOS.pkg"
 
     - name: Upload macOS to App Store Connect
-      if: env.SAFARI_WEBEXT_HAS_MACOS == 'true'
+      if: inputs.mode == 'build' && env.SAFARI_WEBEXT_HAS_MACOS == 'true'
       shell: bash
       run: |
         xcrun altool --upload-app \
@@ -268,7 +282,7 @@ runs:
           --apiIssuer "$APPLE_API_ISSUER"
 
     - name: Build iOS archive
-      if: env.SAFARI_WEBEXT_HAS_IOS == 'true'
+      if: inputs.mode == 'build' && env.SAFARI_WEBEXT_HAS_IOS == 'true'
       shell: bash
       run: |
         cd "${{ inputs.project-path }}"
@@ -283,7 +297,7 @@ runs:
           CODE_SIGNING_ALLOWED=NO
 
     - name: Export iOS IPA
-      if: env.SAFARI_WEBEXT_HAS_IOS == 'true'
+      if: inputs.mode == 'build' && env.SAFARI_WEBEXT_HAS_IOS == 'true'
       shell: bash
       run: |
         cat > "$RUNNER_TEMP/ExportOptions-iOS.plist" << EOF
@@ -316,7 +330,7 @@ runs:
           -exportPath "$RUNNER_TEMP/ios-export"
 
     - name: Upload iOS to App Store Connect
-      if: env.SAFARI_WEBEXT_HAS_IOS == 'true'
+      if: inputs.mode == 'build' && env.SAFARI_WEBEXT_HAS_IOS == 'true'
       shell: bash
       run: |
         IPA_PATH=$(find "$RUNNER_TEMP/ios-export" -name "*.ipa" | head -1)
@@ -326,9 +340,259 @@ runs:
           --apiKey "$APPLE_API_KEY_ID" \
           --apiIssuer "$APPLE_API_ISSUER"
 
-    - name: Cleanup
-      if: always()
+    - name: Cleanup (build)
+      if: inputs.mode == 'build' && always()
       shell: bash
       run: |
         security delete-keychain "$SAFARI_WEBEXT_KEYCHAIN" 2>/dev/null || true
         rm -rf ~/private_keys ~/Library/MobileDevice/Provisioning\ Profiles 2>/dev/null || true
+
+    # ── SUBMIT MODE ─────────────────────────────────────────────
+
+    - name: Validate inputs (submit)
+      if: inputs.mode == 'submit'
+      shell: bash
+      run: |
+        MISSING=""
+        for var in APPLE_API_KEY APPLE_API_KEY_ID APPLE_API_ISSUER; do
+          if [ -z "${!var}" ]; then
+            MISSING="$MISSING $var"
+          fi
+        done
+        if [ -z "${{ inputs.version }}" ]; then
+          MISSING="$MISSING version(input)"
+        fi
+        if [ -n "$MISSING" ]; then
+          echo "::error::Missing required for submit mode:$MISSING"
+          exit 1
+        fi
+
+    - name: Submit to App Store Connect
+      if: inputs.mode == 'submit'
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        # ── JWT generation ──
+        KEY_PATH=$(mktemp)
+        echo "$APPLE_API_KEY" | base64 --decode > "$KEY_PATH"
+        trap "rm -f '$KEY_PATH'" EXIT
+
+        base64url() {
+          if command -v basenc &>/dev/null; then
+            basenc --base64url -w0 | tr -d '='
+          else
+            base64 | tr '+/' '-_' | tr -d '=\n'
+          fi
+        }
+
+        generate_jwt() {
+          local header payload header_b64 payload_b64 signature
+          local now exp
+          now=$(date +%s)
+          exp=$((now + 1200))
+          header='{"alg":"ES256","kid":"'"$APPLE_API_KEY_ID"'","typ":"JWT"}'
+          payload='{"iss":"'"$APPLE_API_ISSUER"'","iat":'"$now"',"exp":'"$exp"',"aud":"appstoreconnect-v1"}'
+          header_b64=$(echo -n "$header" | base64url)
+          payload_b64=$(echo -n "$payload" | base64url)
+          signature=$(echo -n "$header_b64.$payload_b64" | openssl dgst -sha256 -sign "$KEY_PATH" -binary | base64url)
+          echo "$header_b64.$payload_b64.$signature"
+        }
+
+        JWT=$(generate_jwt)
+        API="https://api.appstoreconnect.apple.com/v1"
+        AUTH="Authorization: Bearer $JWT"
+
+        api_get() {
+          curl -sf -H "$AUTH" -H "Content-Type: application/json" "$1"
+        }
+        api_post() {
+          curl -sf -X POST -H "$AUTH" -H "Content-Type: application/json" -d "$2" "$1"
+        }
+        api_patch() {
+          curl -sf -X PATCH -H "$AUTH" -H "Content-Type: application/json" -d "$2" "$1"
+        }
+
+        # ── Find app ──
+        echo "Looking up app with bundle ID: ${{ inputs.bundle-identifier }}"
+        APP_RESPONSE=$(api_get "$API/apps?filter[bundleId]=${{ inputs.bundle-identifier }}")
+        APP_ID=$(echo "$APP_RESPONSE" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['data'][0]['id'])" 2>/dev/null || true)
+        if [ -z "$APP_ID" ]; then
+          echo "::error::App not found for bundle ID: ${{ inputs.bundle-identifier }}"
+          exit 1
+        fi
+        echo "Found app ID: $APP_ID"
+
+        # ── Process each platform ──
+        submit_platform() {
+          local PLATFORM="$1"
+          local PLATFORM_DISPLAY="$2"
+
+          echo ""
+          echo "━━━ $PLATFORM_DISPLAY ━━━"
+
+          # Regenerate JWT in case it expired during wait
+          JWT=$(generate_jwt)
+          AUTH="Authorization: Bearer $JWT"
+
+          # Wait for latest build to finish processing (up to 15 minutes)
+          echo "Waiting for $PLATFORM_DISPLAY build to finish processing..."
+          local BUILD_ID=""
+          local ATTEMPT=0
+          local MAX_ATTEMPTS=30
+          while [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
+            ATTEMPT=$((ATTEMPT + 1))
+
+            # Regenerate JWT every 5 attempts to avoid expiry
+            if [ $((ATTEMPT % 5)) -eq 0 ]; then
+              JWT=$(generate_jwt)
+              AUTH="Authorization: Bearer $JWT"
+            fi
+
+            local BUILDS_RESPONSE
+            BUILDS_RESPONSE=$(api_get "$API/builds?filter[app]=$APP_ID&filter[processingState]=PROCESSING,VALID&filter[preReleaseVersion.platform]=$PLATFORM&sort=-uploadedDate&limit=1") || true
+
+            local STATE
+            STATE=$(echo "$BUILDS_RESPONSE" | python3 -c "
+        import sys,json
+        d=json.load(sys.stdin)
+        if d.get('data'):
+            b=d['data'][0]
+            print(b['attributes']['processingState'] + ' ' + b['id'])
+        else:
+            print('NONE')
+        " 2>/dev/null || echo "NONE")
+
+            if [ "$STATE" = "NONE" ]; then
+              echo "No build found for $PLATFORM_DISPLAY. Skipping."
+              return 0
+            fi
+
+            BUILD_ID="${STATE#* }"
+            local BUILD_STATE="${STATE%% *}"
+
+            if [ "$BUILD_STATE" = "VALID" ]; then
+              echo "Build $BUILD_ID is ready (VALID)"
+              break
+            fi
+
+            echo "Build is still processing (attempt $ATTEMPT/$MAX_ATTEMPTS)..."
+            sleep 30
+          done
+
+          if [ -z "$BUILD_ID" ]; then
+            echo "::warning::Timed out waiting for $PLATFORM_DISPLAY build. Skipping."
+            return 0
+          fi
+
+          # Check existing versions
+          local VERSIONS_RESPONSE
+          VERSIONS_RESPONSE=$(api_get "$API/apps/$APP_ID/appStoreVersions?filter[platform]=$PLATFORM&filter[appStoreState]=PREPARE_FOR_SUBMISSION,WAITING_FOR_REVIEW,IN_REVIEW,ACCEPTED,DEVELOPER_REJECTED&limit=5")
+
+          local VERSION_INFO
+          VERSION_INFO=$(echo "$VERSIONS_RESPONSE" | python3 -c "
+        import sys,json
+        d=json.load(sys.stdin)
+        if not d.get('data'):
+            print('NONE')
+        else:
+            v=d['data'][0]
+            state=v['attributes']['appStoreState']
+            vid=v['id']
+            vstr=v['attributes']['versionString']
+            print(f'{state} {vid} {vstr}')
+        " 2>/dev/null || echo "NONE")
+
+          local VERSION_STATE="${VERSION_INFO%% *}"
+          local REST="${VERSION_INFO#* }"
+          local VERSION_ID="${REST%% *}"
+          local VERSION_STR="${REST#* }"
+
+          echo "Current version state: $VERSION_STATE"
+
+          case "$VERSION_STATE" in
+            WAITING_FOR_REVIEW|IN_REVIEW|ACCEPTED)
+              echo "Version $VERSION_STR is $VERSION_STATE for $PLATFORM_DISPLAY. Skipping submission."
+              return 0
+              ;;
+            DEVELOPER_REJECTED|PREPARE_FOR_SUBMISSION)
+              echo "Updating existing version $VERSION_STR (state: $VERSION_STATE)..."
+              # Update version string if different
+              if [ "$VERSION_STR" != "${{ inputs.version }}" ]; then
+                api_patch "$API/appStoreVersions/$VERSION_ID" '{
+                  "data": {
+                    "type": "appStoreVersions",
+                    "id": "'"$VERSION_ID"'",
+                    "attributes": {
+                      "versionString": "${{ inputs.version }}"
+                    }
+                  }
+                }' > /dev/null
+                echo "Updated version string to ${{ inputs.version }}"
+              fi
+              ;;
+            NONE)
+              echo "Creating new version ${{ inputs.version }} for $PLATFORM_DISPLAY..."
+              local CREATE_RESPONSE
+              CREATE_RESPONSE=$(api_post "$API/appStoreVersions" '{
+                "data": {
+                  "type": "appStoreVersions",
+                  "attributes": {
+                    "platform": "'"$PLATFORM"'",
+                    "versionString": "${{ inputs.version }}"
+                  },
+                  "relationships": {
+                    "app": {
+                      "data": {
+                        "type": "apps",
+                        "id": "'"$APP_ID"'"
+                      }
+                    }
+                  }
+                }
+              }')
+              VERSION_ID=$(echo "$CREATE_RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin)['data']['id'])")
+              echo "Created version with ID: $VERSION_ID"
+              ;;
+          esac
+
+          # Attach build to version
+          echo "Attaching build $BUILD_ID to version..."
+          api_patch "$API/appStoreVersions/$VERSION_ID/relationships/build" '{
+            "data": {
+              "type": "builds",
+              "id": "'"$BUILD_ID"'"
+            }
+          }' > /dev/null
+          echo "Build attached."
+
+          # Submit for review
+          echo "Submitting for review..."
+          local SUBMIT_RESPONSE
+          SUBMIT_RESPONSE=$(api_post "$API/appStoreVersionSubmissions" '{
+            "data": {
+              "type": "appStoreVersionSubmissions",
+              "relationships": {
+                "appStoreVersion": {
+                  "data": {
+                    "type": "appStoreVersions",
+                    "id": "'"$VERSION_ID"'"
+                  }
+                }
+              }
+            }
+          }' 2>&1) || true
+
+          if echo "$SUBMIT_RESPONSE" | python3 -c "import sys,json; json.load(sys.stdin)['data']" &>/dev/null; then
+            echo "✅ $PLATFORM_DISPLAY v${{ inputs.version }} submitted for review!"
+          else
+            echo "::warning::Failed to submit $PLATFORM_DISPLAY for review. Response: $SUBMIT_RESPONSE"
+          fi
+        }
+
+        # Submit for both platforms
+        submit_platform "MAC_OS" "macOS"
+        submit_platform "IOS" "iOS"
+
+        echo ""
+        echo "Done."

@@ -19,6 +19,13 @@ Add this action as a step in a `macos-26` job, after the Safari Xcode project ha
 - **macOS uses `productbuild`** (not `xcodebuild -exportArchive`) for the installer package because the "3rd Party Mac Developer Installer" cert works with productbuild but not exportArchive
 - **iOS uses `xcodebuild -exportArchive`** because iOS IPA packaging requires it
 
+## Modes
+
+- **`build`** (default) — builds, signs, and uploads the app on macOS CI (`macos-26`). Requires certificates, provisioning profiles, and all build-related inputs.
+- **`submit`** — creates a version in App Store Connect, attaches the latest processed build, and submits for review. Uses only the App Store Connect API (no native tools), so it runs on Linux. Requires `APPLE_API_KEY`, `APPLE_API_KEY_ID`, `APPLE_API_ISSUER`, `bundle-identifier`, and `version` input.
+
+The intended CI pattern is: a `build` job on macOS uploads the binary, then a dependent `submit` job on Linux creates the version and submits for review.
+
 ## Testing Changes
 
 There are no unit tests. To test changes, bump a version in a project that uses this action (e.g. `rxliuli/imp-translate` or `rxliuli/redirector`) and check the CI results.
