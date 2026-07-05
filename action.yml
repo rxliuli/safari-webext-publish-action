@@ -404,13 +404,13 @@ runs:
         AUTH="Authorization: Bearer $JWT"
 
         api_get() {
-          curl -sf -H "$AUTH" -H "Content-Type: application/json" "$1"
+          curl -sfg -H "$AUTH" -H "Content-Type: application/json" "$1"
         }
         api_post() {
-          curl -sf -X POST -H "$AUTH" -H "Content-Type: application/json" -d "$2" "$1"
+          curl -sfg -X POST -H "$AUTH" -H "Content-Type: application/json" -d "$2" "$1"
         }
         api_patch() {
-          curl -sf -X PATCH -H "$AUTH" -H "Content-Type: application/json" -d "$2" "$1"
+          curl -sfg -X PATCH -H "$AUTH" -H "Content-Type: application/json" -d "$2" "$1"
         }
 
         # ── Find app ──
