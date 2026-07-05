@@ -513,9 +513,9 @@ runs:
             return 0
           fi
 
-          # Check existing versions
+          # Check existing versions (no state filter — check in code)
           local VERSIONS_RESPONSE
-          VERSIONS_RESPONSE=$(api_get "$API/apps/$APP_ID/appStoreVersions?filter[platform]=$PLATFORM&filter[appStoreState]=PREPARE_FOR_SUBMISSION,WAITING_FOR_REVIEW,IN_REVIEW,ACCEPTED,DEVELOPER_REJECTED&limit=5")
+          VERSIONS_RESPONSE=$(api_get "$API/apps/$APP_ID/appStoreVersions?filter[platform]=$PLATFORM&limit=1&sort=-createdDate")
 
           local VERSION_INFO
           VERSION_INFO=$(echo "$VERSIONS_RESPONSE" | python3 -c "
@@ -539,13 +539,12 @@ runs:
           echo "Current version state: $VERSION_STATE"
 
           case "$VERSION_STATE" in
-            WAITING_FOR_REVIEW|IN_REVIEW|ACCEPTED)
-              echo "Version $VERSION_STR is $VERSION_STATE for $PLATFORM_DISPLAY. Skipping submission."
+            WAITING_FOR_REVIEW|IN_REVIEW)
+              echo "Version $VERSION_STR is $VERSION_STATE for $PLATFORM_DISPLAY. Skipping."
               return 0
               ;;
             DEVELOPER_REJECTED|PREPARE_FOR_SUBMISSION)
               echo "Updating existing version $VERSION_STR (state: $VERSION_STATE)..."
-              # Update version string if different
               if [ "$VERSION_STR" != "${{ inputs.version }}" ]; then
                 api_patch "$API/appStoreVersions/$VERSION_ID" '{
                   "data": {
@@ -559,8 +558,8 @@ runs:
                 echo "Updated version string to ${{ inputs.version }}"
               fi
               ;;
-            NONE)
-              echo "Creating new version ${{ inputs.version }} for $PLATFORM_DISPLAY..."
+            *)
+              echo "Creating new version ${{ inputs.version }} for $PLATFORM_DISPLAY (current: $VERSION_STATE)..."
               local CREATE_RESPONSE
               CREATE_RESPONSE=$(api_post "$API/appStoreVersions" '{
                 "data": {
