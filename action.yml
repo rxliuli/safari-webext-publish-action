@@ -446,6 +446,8 @@ runs:
         echo "Found app ID: $APP_ID"
 
         # ── Process each platform ──
+        VERSION_IDS=()
+
         submit_platform() {
           local PLATFORM="$1"
           local PLATFORM_DISPLAY="$2"
@@ -588,6 +590,7 @@ runs:
           }' > /dev/null
           echo "Build attached."
 
+          VERSION_IDS+=("$VERSION_ID")
         }
 
         # Prepare both platforms
@@ -597,6 +600,11 @@ runs:
         # Submit all pending versions for review (one submission per app)
         echo ""
         echo "━━━ Submitting for review ━━━"
+
+        if [ ${#VERSION_IDS[@]} -eq 0 ]; then
+          echo "No versions to submit. Done."
+          exit 0
+        fi
 
         JWT=$(generate_jwt)
         AUTH="Authorization: Bearer $JWT"
@@ -620,7 +628,33 @@ runs:
           echo "::warning::Failed to create review submission. Response: $SUBMIT_RESPONSE"
           exit 0
         fi
+        echo "Created review submission: $SUBMISSION_ID"
 
+        # Add each version as a review submission item
+        for VID in "${VERSION_IDS[@]}"; do
+          echo "Adding version $VID to submission..."
+          api_post "$API/reviewSubmissionItems" '{
+            "data": {
+              "type": "reviewSubmissionItems",
+              "relationships": {
+                "reviewSubmission": {
+                  "data": {
+                    "type": "reviewSubmissions",
+                    "id": "'"$SUBMISSION_ID"'"
+                  }
+                },
+                "appStoreVersion": {
+                  "data": {
+                    "type": "appStoreVersions",
+                    "id": "'"$VID"'"
+                  }
+                }
+              }
+            }
+          }' > /dev/null
+        done
+
+        # Confirm the submission
         CONFIRM_RESPONSE=$(api_patch "$API/reviewSubmissions/$SUBMISSION_ID" '{
           "data": {
             "type": "reviewSubmissions",
