@@ -518,21 +518,26 @@ runs:
           VERSIONS_RESPONSE=$(api_get "$API/apps/$APP_ID/appStoreVersions?filter[platform]=$PLATFORM&limit=5")
 
           local VERSION_INFO
+          # Debug: show all versions
+          echo "$VERSIONS_RESPONSE" | python3 -c "
+        import sys,json
+        d=json.load(sys.stdin)
+        for v in d.get('data',[]):
+            print(f'  found version {v[\"attributes\"][\"versionString\"]}: {v[\"attributes\"][\"appStoreState\"]} ({v[\"id\"]})')
+        " || true
+
           VERSION_INFO=$(echo "$VERSIONS_RESPONSE" | python3 -c "
         import sys,json
         d=json.load(sys.stdin)
         if not d.get('data'):
-            print('NONE', file=sys.stderr)
             print('NONE')
         else:
             editable = ['PREPARE_FOR_SUBMISSION','DEVELOPER_REJECTED']
             blocked = ['WAITING_FOR_REVIEW','IN_REVIEW']
             for v in d['data']:
                 s = v['attributes']['appStoreState']
-                vs = v['attributes']['versionString']
-                print(f'  version {vs}: {s} ({v[\"id\"]})', file=sys.stderr)
                 if s in editable or s in blocked:
-                    print(f'{s} {v[\"id\"]} {vs}')
+                    print(f'{s} {v[\"id\"]} {v[\"attributes\"][\"versionString\"]}')
                     sys.exit()
             print('NONE')
         " 2>/dev/null || echo "NONE")
