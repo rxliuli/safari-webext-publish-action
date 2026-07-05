@@ -486,7 +486,7 @@ runs:
             fi
 
             local BUILDS_RESPONSE
-            BUILDS_RESPONSE=$(api_get "$API/builds?filter[app]=$APP_ID&filter[processingState]=PROCESSING,VALID&filter[preReleaseVersion.platform]=$PLATFORM&sort=-uploadedDate&limit=1") || true
+            BUILDS_RESPONSE=$(api_get "$API/builds?filter[app]=$APP_ID&filter[processingState]=PROCESSING,VALID&filter[preReleaseVersion.platform]=$PLATFORM&filter[preReleaseVersion.version]=${{ inputs.version }}&sort=-uploadedDate&limit=1") || true
 
             local STATE
             STATE=$(echo "$BUILDS_RESPONSE" | python3 -c "
@@ -499,11 +499,6 @@ runs:
             print('NONE')
         " 2>/dev/null || echo "NONE")
 
-            if [ "$STATE" = "NONE" ]; then
-              echo "No build found for $PLATFORM_DISPLAY. Skipping."
-              return 0
-            fi
-
             BUILD_ID="${STATE#* }"
             local BUILD_STATE="${STATE%% *}"
 
@@ -512,7 +507,11 @@ runs:
               break
             fi
 
-            echo "Build is still processing (attempt $ATTEMPT/$MAX_ATTEMPTS)..."
+            if [ "$BUILD_STATE" = "NONE" ]; then
+              echo "No build found yet for $PLATFORM_DISPLAY v${{ inputs.version }} (attempt $ATTEMPT/$MAX_ATTEMPTS)..."
+            else
+              echo "Build is still processing (attempt $ATTEMPT/$MAX_ATTEMPTS)..."
+            fi
             sleep 30
           done
 
