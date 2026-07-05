@@ -588,17 +588,17 @@ runs:
           }' > /dev/null
           echo "Build attached."
 
-          # Submit for review
+          # Submit for review (using reviewSubmissions API)
           echo "Submitting for review..."
           local SUBMIT_RESPONSE
-          SUBMIT_RESPONSE=$(api_post "$API/appStoreVersionSubmissions" '{
+          SUBMIT_RESPONSE=$(api_post "$API/reviewSubmissions" '{
             "data": {
-              "type": "appStoreVersionSubmissions",
+              "type": "reviewSubmissions",
               "relationships": {
-                "appStoreVersion": {
+                "app": {
                   "data": {
-                    "type": "appStoreVersions",
-                    "id": "'"$VERSION_ID"'"
+                    "type": "apps",
+                    "id": "'"$APP_ID"'"
                   }
                 }
               }
