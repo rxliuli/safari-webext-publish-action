@@ -641,9 +641,8 @@ runs:
           SUBMISSION_ID=$(api_get "$API/apps/$APP_ID/reviewSubmissions" | python3 -c "
         import sys,json
         d=json.load(sys.stdin)
-        skip = {'WAITING_FOR_REVIEW','IN_REVIEW','COMPLETING'}
         for s in d.get('data',[]):
-            if s['attributes']['state'] not in skip:
+            if s['attributes']['state'] == 'READY_FOR_REVIEW':
                 print(s['id'])
                 sys.exit()
         " 2>/dev/null || true)
