@@ -532,7 +532,7 @@ runs:
         if not d.get('data'):
             print('NONE')
         else:
-            editable = ['PREPARE_FOR_SUBMISSION','DEVELOPER_REJECTED']
+            editable = ['PREPARE_FOR_SUBMISSION','DEVELOPER_REJECTED','READY_FOR_REVIEW']
             blocked = ['WAITING_FOR_REVIEW','IN_REVIEW']
             for v in d['data']:
                 s = v['attributes']['appStoreState']
@@ -554,7 +554,7 @@ runs:
               echo "Version $VERSION_STR is $VERSION_STATE for $PLATFORM_DISPLAY. Skipping."
               return 0
               ;;
-            DEVELOPER_REJECTED|PREPARE_FOR_SUBMISSION)
+            DEVELOPER_REJECTED|PREPARE_FOR_SUBMISSION|READY_FOR_REVIEW)
               echo "Updating existing version $VERSION_STR (state: $VERSION_STATE)..."
               if [ "$VERSION_STR" != "${{ inputs.version }}" ]; then
                 api_patch "$API/appStoreVersions/$VERSION_ID" '{
