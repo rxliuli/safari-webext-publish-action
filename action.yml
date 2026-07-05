@@ -613,49 +613,32 @@ runs:
             echo "Release notes updated."
           fi
 
-          VERSION_IDS+=("$VERSION_ID")
-        }
+          # Submit for review
+          echo "Submitting $PLATFORM_DISPLAY for review..."
+          JWT=$(generate_jwt)
+          AUTH="Authorization: Bearer $JWT"
 
-        # Prepare both platforms
-        submit_platform "MAC_OS" "macOS"
-        submit_platform "IOS" "iOS"
-
-        # Submit all pending versions for review (one submission per app)
-        echo ""
-        echo "━━━ Submitting for review ━━━"
-
-        if [ ${#VERSION_IDS[@]} -eq 0 ]; then
-          echo "No versions to submit. Done."
-          exit 0
-        fi
-
-        JWT=$(generate_jwt)
-        AUTH="Authorization: Bearer $JWT"
-
-        SUBMIT_RESPONSE=$(api_post "$API/reviewSubmissions" '{
-          "data": {
-            "type": "reviewSubmissions",
-            "relationships": {
-              "app": {
-                "data": {
-                  "type": "apps",
-                  "id": "'"$APP_ID"'"
+          local SUBMIT_RESPONSE SUBMISSION_ID
+          SUBMIT_RESPONSE=$(api_post "$API/reviewSubmissions" '{
+            "data": {
+              "type": "reviewSubmissions",
+              "relationships": {
+                "app": {
+                  "data": {
+                    "type": "apps",
+                    "id": "'"$APP_ID"'"
+                  }
                 }
               }
             }
-          }
-        }' 2>&1) || true
+          }' 2>&1) || true
 
-        SUBMISSION_ID=$(echo "$SUBMIT_RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin)['data']['id'])" 2>/dev/null || true)
-        if [ -z "$SUBMISSION_ID" ]; then
-          echo "::warning::Failed to create review submission. Response: $SUBMIT_RESPONSE"
-          exit 0
-        fi
-        echo "Created review submission: $SUBMISSION_ID"
+          SUBMISSION_ID=$(echo "$SUBMIT_RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin)['data']['id'])" 2>/dev/null || true)
+          if [ -z "$SUBMISSION_ID" ]; then
+            echo "::warning::Failed to create review submission for $PLATFORM_DISPLAY. Response: $SUBMIT_RESPONSE"
+            return 0
+          fi
 
-        # Add each version as a review submission item
-        for VID in "${VERSION_IDS[@]}"; do
-          echo "Adding version $VID to submission..."
           api_post "$API/reviewSubmissionItems" '{
             "data": {
               "type": "reviewSubmissionItems",
@@ -669,30 +652,34 @@ runs:
                 "appStoreVersion": {
                   "data": {
                     "type": "appStoreVersions",
-                    "id": "'"$VID"'"
+                    "id": "'"$VERSION_ID"'"
                   }
                 }
               }
             }
           }' > /dev/null
-        done
 
-        # Confirm the submission
-        CONFIRM_RESPONSE=$(api_patch "$API/reviewSubmissions/$SUBMISSION_ID" '{
-          "data": {
-            "type": "reviewSubmissions",
-            "id": "'"$SUBMISSION_ID"'",
-            "attributes": {
-              "submitted": true
+          local CONFIRM_RESPONSE
+          CONFIRM_RESPONSE=$(api_patch "$API/reviewSubmissions/$SUBMISSION_ID" '{
+            "data": {
+              "type": "reviewSubmissions",
+              "id": "'"$SUBMISSION_ID"'",
+              "attributes": {
+                "submitted": true
+              }
             }
-          }
-        }' 2>&1) || true
+          }' 2>&1) || true
 
-        if echo "$CONFIRM_RESPONSE" | python3 -c "import sys,json; json.load(sys.stdin)['data']" &>/dev/null; then
-          echo "✅ v${{ inputs.version }} submitted for review!"
-        else
-          echo "::warning::Failed to confirm review submission. Response: $CONFIRM_RESPONSE"
-        fi
+          if echo "$CONFIRM_RESPONSE" | python3 -c "import sys,json; json.load(sys.stdin)['data']" &>/dev/null; then
+            echo "✅ $PLATFORM_DISPLAY v${{ inputs.version }} submitted for review!"
+          else
+            echo "::warning::Failed to confirm review for $PLATFORM_DISPLAY. Response: $CONFIRM_RESPONSE"
+          fi
+        }
+
+        # Process both platforms
+        submit_platform "MAC_OS" "macOS"
+        submit_platform "IOS" "iOS"
 
         echo ""
         echo "Done."
