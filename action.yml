@@ -515,7 +515,7 @@ runs:
 
           # Check existing versions (no state filter — check in code)
           local VERSIONS_RESPONSE
-          VERSIONS_RESPONSE=$(api_get "$API/apps/$APP_ID/appStoreVersions?filter[platform]=$PLATFORM&limit=1&sort=-createdDate")
+          VERSIONS_RESPONSE=$(api_get "$API/apps/$APP_ID/appStoreVersions?filter[platform]=$PLATFORM&limit=5")
 
           local VERSION_INFO
           VERSION_INFO=$(echo "$VERSIONS_RESPONSE" | python3 -c "
@@ -524,11 +524,14 @@ runs:
         if not d.get('data'):
             print('NONE')
         else:
-            v=d['data'][0]
-            state=v['attributes']['appStoreState']
-            vid=v['id']
-            vstr=v['attributes']['versionString']
-            print(f'{state} {vid} {vstr}')
+            editable = ['PREPARE_FOR_SUBMISSION','DEVELOPER_REJECTED']
+            blocked = ['WAITING_FOR_REVIEW','IN_REVIEW']
+            for v in d['data']:
+                s = v['attributes']['appStoreState']
+                if s in editable or s in blocked:
+                    print(f'{s} {v[\"id\"]} {v[\"attributes\"][\"versionString\"]}')
+                    sys.exit()
+            print('NONE')
         " 2>/dev/null || echo "NONE")
 
           local VERSION_STATE="${VERSION_INFO%% *}"
