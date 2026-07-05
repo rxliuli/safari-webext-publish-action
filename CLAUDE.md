@@ -26,6 +26,17 @@ Add this action as a step in a `macos-26` job, after the Safari Xcode project ha
 
 The intended CI pattern is: a `build` job on macOS uploads the binary, then a dependent `submit` job on Linux creates the version and submits for review.
 
+## Releasing a New Version
+
+This action follows the GitHub Actions floating tag convention (same as `actions/checkout@v5` etc.):
+
+1. Commit your changes and push to main
+2. Create a semver tag: `git tag v2.x.x`
+3. Move the floating `v2` tag: `git tag -f v2 v2.x.x`
+4. Push both: `git push origin v2.x.x` then `git push origin v2 --force`
+
+The `v2` tag must be force-pushed every time — this is how GitHub Actions major version tags work. Users reference `@v2` to auto-track the latest, or `@v2.x.x` to pin a specific version.
+
 ## Testing Changes
 
 There are no unit tests. To test changes, bump a version in a project that uses this action (e.g. `rxliuli/imp-translate` or `rxliuli/redirector`) and check the CI results.
