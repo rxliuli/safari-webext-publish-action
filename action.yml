@@ -438,6 +438,14 @@ runs:
         api_get() { api_request GET "$1"; }
         api_post() { api_request POST "$1" "$2"; }
         api_patch() { api_request PATCH "$1" "$2"; }
+        api_delete() {
+          local URL="$1"
+          local HTTP_CODE
+          HTTP_CODE=$(curl -sg -o /dev/null -w "%{http_code}" -X DELETE -H "$AUTH" "$URL")
+          if [ "$HTTP_CODE" -ge 400 ]; then
+            echo "::warning::DELETE $URL returned HTTP $HTTP_CODE" >&2
+          fi
+        }
 
         # ── Find app ──
         echo "Looking up app with bundle ID: ${{ inputs.bundle-identifier }}"
@@ -448,6 +456,25 @@ runs:
           exit 1
         fi
         echo "Found app ID: $APP_ID"
+
+        # ── Clean up stale draft review submissions ──
+        STALE_IDS=$(api_get "$API/apps/$APP_ID/reviewSubmissions" | python3 -c "
+        import sys,json
+        d=json.load(sys.stdin)
+        for s in d.get('data',[]):
+            state=s['attributes']['state']
+            if state in ('WAITING_FOR_REVIEW','IN_REVIEW','COMPLETING'):
+                continue
+            print(s['id'])
+        " 2>/dev/null || true)
+
+        if [ -n "$STALE_IDS" ]; then
+          echo "Cleaning up stale review submissions..."
+          for SID in $STALE_IDS; do
+            api_delete "$API/reviewSubmissions/$SID"
+          done
+          echo "Cleaned up $(echo "$STALE_IDS" | wc -l | tr -d ' ') stale submissions."
+        fi
 
         # ── Process each platform ──
         VERSION_IDS=()
