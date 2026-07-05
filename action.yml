@@ -522,14 +522,17 @@ runs:
         import sys,json
         d=json.load(sys.stdin)
         if not d.get('data'):
+            print('NONE', file=sys.stderr)
             print('NONE')
         else:
             editable = ['PREPARE_FOR_SUBMISSION','DEVELOPER_REJECTED']
             blocked = ['WAITING_FOR_REVIEW','IN_REVIEW']
             for v in d['data']:
                 s = v['attributes']['appStoreState']
+                vs = v['attributes']['versionString']
+                print(f'  version {vs}: {s} ({v[\"id\"]})', file=sys.stderr)
                 if s in editable or s in blocked:
-                    print(f'{s} {v[\"id\"]} {v[\"attributes\"][\"versionString\"]}')
+                    print(f'{s} {v[\"id\"]} {vs}')
                     sys.exit()
             print('NONE')
         " 2>/dev/null || echo "NONE")
