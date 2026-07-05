@@ -403,15 +403,26 @@ runs:
         API="https://api.appstoreconnect.apple.com/v1"
         AUTH="Authorization: Bearer $JWT"
 
-        api_get() {
-          curl -sfg -H "$AUTH" -H "Content-Type: application/json" "$1"
+        api_request() {
+          local METHOD="$1" URL="$2" BODY="${3:-}"
+          local HTTP_CODE RESPONSE TMPFILE
+          TMPFILE=$(mktemp)
+          if [ -n "$BODY" ]; then
+            HTTP_CODE=$(curl -sg -o "$TMPFILE" -w "%{http_code}" -X "$METHOD" -H "$AUTH" -H "Content-Type: application/json" -d "$BODY" "$URL")
+          else
+            HTTP_CODE=$(curl -sg -o "$TMPFILE" -w "%{http_code}" -X "$METHOD" -H "$AUTH" -H "Content-Type: application/json" "$URL")
+          fi
+          RESPONSE=$(cat "$TMPFILE")
+          rm -f "$TMPFILE"
+          if [ "$HTTP_CODE" -ge 400 ]; then
+            echo "::error::API $METHOD $URL returned HTTP $HTTP_CODE: $RESPONSE"
+            return 1
+          fi
+          echo "$RESPONSE"
         }
-        api_post() {
-          curl -sfg -X POST -H "$AUTH" -H "Content-Type: application/json" -d "$2" "$1"
-        }
-        api_patch() {
-          curl -sfg -X PATCH -H "$AUTH" -H "Content-Type: application/json" -d "$2" "$1"
-        }
+        api_get() { api_request GET "$1"; }
+        api_post() { api_request POST "$1" "$2"; }
+        api_patch() { api_request PATCH "$1" "$2"; }
 
         # ── Find app ──
         echo "Looking up app with bundle ID: ${{ inputs.bundle-identifier }}"
